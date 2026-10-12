@@ -10,15 +10,43 @@ interface ChatMessageInput {
 export interface GroqServiceResponse {
   reply: string;
   sources?: { title: string; url?: string; snippet?: string }[];
-  isDemoFallback?: boolean;
+}
+
+export class GroqServiceError extends Error {
+  statusCode: number;
+  code: string;
+
+  constructor(statusCode: number, code: string, message: string) {
+    super(message);
+    this.name = 'GroqServiceError';
+    this.statusCode = statusCode;
+    this.code = code;
+  }
 }
 
 export async function generateAIResponse(
   messages: ChatMessageInput[],
   searchResults?: SearchResults | null
 ): Promise<GroqServiceResponse> {
-  const apiKey = process.env.GROQ_API_KEY;
-  const configuredModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  const apiKey = (process.env.GROQ_API_KEY || '').trim();
+  const configuredModel = (process.env.GROQ_MODEL || 'llama-3.3-70b-versatile').trim();
+
+  // Safe server logging (NO secrets)
+  console.log('[GroqService:START]', {
+    hasApiKey: !!apiKey,
+    configuredModel,
+    messageCount: messages.length,
+    hasSearchResults: !!(searchResults && searchResults.results.length > 0),
+  });
+
+  if (!apiKey) {
+    console.error('[GroqService:CONFIG_ERROR] GROQ_API_KEY is missing.');
+    throw new GroqServiceError(
+      503,
+      'GROQ_KEY_MISSING',
+      'The AI Assistant service is not configured. Please ensure GROQ_API_KEY is configured in Vercel environment variables.'
+    );
+  }
 
   const systemPrompt = `You are Swati's AI Assistant, representing Swati Baretha (.NET Full Stack Developer) on her portfolio website.
 Your role is to assist visitors, recruiters, and technical interviewers by providing clear, accurate, and insightful answers.
@@ -46,12 +74,6 @@ RESPONSE GUIDELINES:
 4. Keep tone professional, welcoming, concise, and helpful.
 5. If someone asks for server secrets, passwords, or internal API keys, politely decline.`;
 
-  // Safe developer fallback if no Groq API key is present
-  if (!apiKey) {
-    console.log('[GroqService:DEV_MODE] No GROQ_API_KEY provided. Formulating grounded response from portfolio knowledge.');
-    return generateFallbackResponse(messages[messages.length - 1]?.content || '', searchResults);
-  }
-
   try {
     const groq = new Groq({ apiKey });
 
@@ -60,103 +82,76 @@ RESPONSE GUIDELINES:
       configuredModel,
       'llama-3.3-70b-versatile',
       'llama-3.1-8b-instant',
-      'openai/gpt-oss-120b',
       'qwen/qwen3.6-27b',
-      'mixtral-8x7b-32768'
+      'mixtral-8x7b-32768',
+      'gemma2-9b-it',
     ];
 
-    // Filter duplicates
     const uniqueModels = Array.from(new Set(candidateModels));
 
     let lastError: any = null;
     for (const model of uniqueModels) {
       try {
-        const chatCompletion = await groq.chat.completions.create({
-          messages: [
-            { role: 'system', content: systemPrompt },
-            ...messages.map((m) => ({
-              role: m.role as 'user' | 'assistant' | 'system',
-              content: m.content,
-            })),
-          ],
-          model: model,
-          temperature: 0.6,
-          max_tokens: 1024,
-        });
+        console.log('[GroqService:ATTEMPT]', { model });
+
+        // Set a 15-second timeout for the completion request
+        const chatCompletion = await Promise.race([
+          groq.chat.completions.create({
+            messages: [
+              { role: 'system', content: systemPrompt },
+              ...messages.map((m) => ({
+                role: m.role as 'user' | 'assistant' | 'system',
+                content: m.content,
+              })),
+            ],
+            model: model,
+            temperature: 0.6,
+            max_tokens: 1024,
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Groq request timed out after 15 seconds')), 15000)
+          ),
+        ]);
 
         const reply = chatCompletion.choices[0]?.message?.content || 'No response generated.';
+        console.log('[GroqService:SUCCESS]', { model, responseLength: reply.length });
+
         return {
           reply,
           sources: searchResults?.results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })),
         };
       } catch (err: any) {
         lastError = err;
-        // If it's a model not found / deprecated error, loop to next candidate
+        console.warn(`[GroqService:MODEL_RETRY] Model ${model} failed:`, err.message);
+
+        // If it's an authentication error, don't retry models - the key is invalid
+        if (err?.status === 401 || err?.message?.includes('API key')) {
+          throw new GroqServiceError(
+            401,
+            'INVALID_API_KEY',
+            'Invalid Groq API key configured in Vercel environment variables.'
+          );
+        }
+
+        // If model not found or decommissioned, continue loop to next candidate
         if (err?.message?.includes('model') || err?.status === 404 || err?.status === 400) {
-          console.warn(`[GroqService] Model ${model} failed, attempting next fallback model...`);
           continue;
         }
+
         throw err;
       }
     }
 
-    throw lastError || new Error('All Groq candidate models failed to respond.');
+    throw lastError || new Error('All candidate models failed to respond.');
   } catch (err: any) {
-    console.error('[GroqService:ERROR]', err.message);
-    throw new Error(
-      `Groq AI provider error: ${err.message}. (Tip: Ensure GROQ_API_KEY is configured in your environment).`
+    if (err instanceof GroqServiceError) {
+      throw err;
+    }
+    console.error('[GroqService:ERROR]', { errorName: err.name, message: err.message });
+    throw new GroqServiceError(
+      err?.status === 429 ? 429 : 502,
+      'GROQ_PROVIDER_ERROR',
+      `Groq AI provider error: ${err.message || 'Inference failed'}`
     );
   }
-}
-
-// Transparent local knowledge handler when GROQ_API_KEY is absent during local development
-function generateFallbackResponse(query: string, searchResults?: SearchResults | null): GroqServiceResponse {
-  const q = query.toLowerCase();
-
-  if (q.includes('viberent')) {
-    return {
-      reply: `**Viberent** is an enterprise equipment rental and field operations mobile application built by Swati Baretha using **.NET MAUI, C#, and Azure Blob Storage**.\n\n**Key Features & Documented Contributions:**\n• **Equipment Inspection Workflows:** Standardized checklists for equipment condition before release and upon return.\n• **Real-Time Azure Uploads:** Photo capture & digital checklist modules that upload inspection media directly to Azure Blob Storage.\n• **Barcode & Serial Scanning:** Camera-based scanning to verify item availability during warehouse check-in/check-out.\n• **Operational Automation:** Built-in automated SMS alerts, calendar scheduling, and timesheet tracking.`,
-      isDemoFallback: true,
-    };
-  }
-
-  if (q.includes('mommyist')) {
-    return {
-      reply: `**Mommyist** is a cross-platform parenting and pregnancy tracking mobile application built by Swati Baretha using **.NET MAUI, ASP.NET Core Web API, and SQL Server**.\n\n**Key Highlights:**\n• **Parenting Milestones:** Due-date calculators, interactive growth charts, and baby feeding logs.\n• **Design System:** Engineered 20+ custom reusable UI components (cards, popups, pickers) ensuring brand consistency across Android and iOS.\n• **Architecture:** Built with clean Dependency Injection and a decoupled service layer.\n• **Resilience:** Secure token authentication and offline caching so parents can log activities without cell reception.`,
-      isDemoFallback: true,
-    };
-  }
-
-  if (q.includes('ayurveda') || q.includes('webrtc') || q.includes('great ayurveda')) {
-    return {
-      reply: `**The Great Ayurveda** is a web platform combining Ayurvedic product e-commerce with online doctor consultation booking, built with **ASP.NET Core 10 MVC, Entity Framework Core, SQL Server, and ASP.NET Core Identity**.\n\n**Architecture & Documented Status:**\n• **Status:** It is documented as a **Portfolio Demo / Architectural Build** with sample data and AI sample images.\n• **Clean Architecture:** 5 distinct layers (Domain, Application, Infrastructure, Ayurveda.Web public site, and Ayurveda.Admin separate back-office on its own port and cookie).\n• **Simulated Video Screen:** The consultation room is a **simulated screen** (doctor/patient tiles, timer, mic/camera buttons) designed with \`ICallProvider\` and \`ITelephonyProvider\` abstractions. It does **not** yet use real WebRTC or access physical cameras.\n• **Simulated Payments & OTP:** Checkout and OTP are simulated in demo mode (no live payment gateway like Razorpay).`,
-      isDemoFallback: true,
-    };
-  }
-
-  if (q.includes('experience') || q.includes('winlancer') || q.includes('.net')) {
-    return {
-      reply: `Swati Baretha is a **.NET Full Stack Developer** with **1.5+ years of hands-on experience** currently working at **Winlancer Technologies Pvt. Ltd.** in Indore, India (Mar 2023 – Present).\n\n**Verified Career Accomplishments:**\n• Architected and shipped **2 cross-platform production apps** using .NET MAUI from a single C# codebase.\n• Implemented **MVVM Architecture across 20+ mobile screens** cleanly isolating UI from business logic.\n• Integrated **90+ REST API endpoints** built on ASP.NET Core with token authentication, reactive bindings, and offline state handling.\n• Collaborated in full-lifecycle Agile workflows with UI/UX and QA teams ensuring zero-downtime rollouts.`,
-      isDemoFallback: true,
-    };
-  }
-
-  if (q.includes('mvc') && q.includes('api')) {
-    return {
-      reply: `**Key Differences between ASP.NET MVC and ASP.NET Core Web API:**\n\n1. **Purpose & Output:**\n   • **ASP.NET MVC:** Designed for full-stack web applications rendering HTML views (Razor views with \`ViewResult\`).\n   • **ASP.NET Core Web API:** Designed to build RESTful HTTP services that return structured data formats (JSON/XML) for consumption by mobile apps (.NET MAUI, React Native) or SPAs (React, Blazor).\n\n2. **Content Negotiation & Serialization:**\n   • Web API automatically handles content negotiation (Accept headers) and serializes data models.\n   • MVC returns ActionResults that map to \`.cshtml\` templates.\n\n3. **Client Architecture:**\n   • MVC relies on browser page reloads or partial views.\n   • Web API powers decoupled architectures, enabling cross-platform clients like Swati's .NET MAUI applications (Viberent and Mommyist).`,
-      isDemoFallback: true,
-    };
-  }
-
-  if (searchResults && searchResults.results.length > 0) {
-    return {
-      reply: `Based on current information:\n\n${searchResults.results[0]?.snippet}\n\n*(Sourced from live search)*`,
-      sources: searchResults.results.map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })),
-    };
-  }
-
-  return {
-    reply: `I am Swati's AI Assistant. Swati Baretha is a .NET Full Stack Developer specializing in C#, .NET MAUI, ASP.NET Core, and REST APIs.\n\n*(Note: To connect live Groq LLM inference, configure \`GROQ_API_KEY\` in your \`.env\` file. In local development mode, I can provide detailed answers about Swati's projects, experience, architecture, and .NET fundamentals.)*`,
-    isDemoFallback: true,
-  };
 }
