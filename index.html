@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Swati Baretha | .NET Full Stack Developer</title>
+    <meta name="description" content="Portfolio of Swati Baretha, a .NET Full Stack Developer with experience in C#, .NET MAUI, ASP.NET Core, REST APIs, SQL Server, and modern web applications." />
+    <meta name="keywords" content="Swati Baretha, .NET Full Stack Developer, .NET MAUI, C#, ASP.NET Core, Web API, SQL Server, Azure, React, Portfolio" />
+    <meta name="author" content="Swati Baretha" />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://swati-baretha.vercel.app/" />
+    <meta property="og:title" content="Swati Baretha | .NET Full Stack Developer" />
+    <meta property="og:description" content="Explore the portfolio, projects, skills, and interactive AI assistant of Swati Baretha, .NET Full Stack Developer." />
+    <meta property="og:image" content="/og-image.png" />
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image" />
+    <meta property="twitter:url" content="https://swati-baretha.vercel.app/" />
+    <meta property="twitter:title" content="Swati Baretha | .NET Full Stack Developer" />
+    <meta property="twitter:description" content="Explore the portfolio, projects, skills, and interactive AI assistant of Swati Baretha, .NET Full Stack Developer." />
+    <meta property="twitter:image" content="/og-image.png" />
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <script>
+      // Immediately set theme from localStorage or system preference to prevent flash
+      (function() {
+        try {
+          var saved = localStorage.getItem('swati_portfolio_theme');
+          if (saved === 'light') {
+            document.documentElement.classList.add('light');
+            document.documentElement.classList.remove('dark');
+          } else {
+            document.documentElement.classList.add('dark');
+            document.documentElement.classList.remove('light');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-light-bg dark:bg-dark-bg text-light-textHeading dark:text-dark-textHeading antialiased selection:bg-brand-primary selection:text-white transition-colors duration-300">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://swati-baretha.vercel.app/sitemap.xml
